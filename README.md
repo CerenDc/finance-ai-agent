@@ -465,3 +465,102 @@ données inaccessibles. Pour conserver explicitement les données lors d'un
 nettoyage manuel, supprimer uniquement les Deployments, Services et le Job, et
 laisser `persistentvolumeclaim/postgres-data` intact. Supprimer le cluster kind
 avec `kind delete cluster --name finance-ai` détruit également son stockage.
+
+## V8.1 — CI/CD + GHCR
+
+Deux workflows GitHub Actions séparent la validation continue de la publication
+du conteneur.
+
+### CI
+
+`.github/workflows/ci.yml` s'exécute sur les Pull Requests vers `main`, sur les
+pushes vers `develop`, `feature/**` et `fix/**`, et comme workflow réutilisable
+avant chaque publication sur `main` ou un tag `v*`. Il réalise :
+
+1. l'installation Python 3.13 et `pytest -q` ;
+2. `docker compose config --quiet` ;
+3. le rendu de la base et de l'overlay de test avec Kustomize ;
+4. le build de l'image principale avec Buildx et cache GitHub Actions ;
+5. le build de l'image synthétique contenant le fake LLM ;
+6. la création d'un cluster kind jetable `finance-ai-ci` ;
+7. le chargement local des images et le déploiement de l'overlay synthétique ;
+8. l'attente des rollouts et du Job de base de données ;
+9. le test HTTP `/health` puis le scénario TechNova via LangGraph et MCP ;
+10. la collecte de diagnostics en cas d'échec et la suppression systématique
+    du cluster CI.
+
+Le scénario CI utilise `SyntheticFinanceLLM`, `OPENAI_API_KEY=not-used` et des
+identifiants PostgreSQL synthétiques. Il ne contacte jamais OpenAI.
+
+### Publication dans GHCR
+
+`.github/workflows/release.yml` s'exécute lors d'un push sur `main` ou d'un tag
+Git `v*`. Il appelle d'abord l'intégralité de la CI réutilisable, y compris le
+test kind, puis publie seulement si cette validation réussit. L'image produite
+est multi-architecture `linux/amd64` et `linux/arm64` et se trouve dans :
+
+```text
+ghcr.io/<owner>/finance-ai-agent
+```
+
+Le nom réel est dérivé automatiquement de `github.repository`. Les tags sont :
+
+- `sha-xxxxxxx` pour chaque commit publié ;
+- `latest` uniquement sur la branche par défaut ;
+- le tag Git complet, par exemple `v8.1.0`, lors d'une release.
+
+Le workflow utilise Buildx, QEMU, le cache GitHub Actions, ainsi que la
+provenance et le SBOM natifs du build Docker. L'authentification GHCR repose sur
+le `GITHUB_TOKEN` temporaire avec les permissions minimales `contents: read` et
+`packages: write`. Aucun PAT n'est requis dans le workflow.
+
+Créer une release après validation de la CI :
+
+```bash
+git tag v8.1.0
+git push origin v8.1.0
+```
+
+Puis récupérer une image précise :
+
+```bash
+docker pull ghcr.io/<owner>/finance-ai-agent:sha-xxxxxxx
+docker pull ghcr.io/<owner>/finance-ai-agent:v8.1.0
+```
+
+### Utilisation de l'image GHCR avec Kustomize
+
+Les manifests utilisent le nom logique `finance-ai-agent`, déjà remplacé par
+la section `images:` de l'overlay de test. Un futur overlay peut donc référencer
+GHCR sans dupliquer les manifests de base :
+
+```yaml
+images:
+  - name: finance-ai-agent
+    newName: ghcr.io/<owner>/finance-ai-agent
+    newTag: sha-xxxxxxx
+```
+
+Si le package GHCR est public, Kubernetes peut le récupérer directement. S'il
+reste privé, créer un Secret local hors Git et l'ajouter à
+`imagePullSecrets`, par exemple :
+
+```bash
+kubectl create secret docker-registry ghcr-pull \
+  --namespace finance-ai \
+  --docker-server=ghcr.io \
+  --docker-username='<github-user>' \
+  --docker-password='<token-read-packages>'
+```
+
+Le test kind CI ne dépend pas de la visibilité GHCR : il utilise toujours
+`kind load docker-image`.
+
+### Sécurité et vérification distante
+
+Les fichiers `.env`, Secrets Kubernetes locaux, clés OpenAI, mots de passe et
+tokens GitHub restent exclus du dépôt et ne sont jamais transmis comme arguments
+de build. Après le push, vérifier dans l'interface GitHub Actions que le workflow
+`CI` termine ses deux jobs, puis que `Publish container image` publie les tags
+attendus. La publication GHCR et l'exécution sur les runners GitHub ne peuvent
+pas être confirmées uniquement par les validations locales.
