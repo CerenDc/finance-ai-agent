@@ -1,0 +1,118 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finance-ai-api
+  labels:
+    app.kubernetes.io/name: finance-ai
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: finance-ai
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: finance-ai
+        app.kubernetes.io/component: api
+    spec:
+      initContainers:
+        - name: wait-for-database-setup
+          image: finance-ai-agent:v8
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: finance-ai-config
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: finance-ai-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: finance-ai-secrets
+                  key: POSTGRES_PASSWORD
+          command: ["python", "-c"]
+          args:
+            - |
+              import os, time
+              import psycopg
+              uri = f"postgresql://{os.environ['POSTGRES_USER']}:{os.environ['POSTGRES_PASSWORD']}@postgres:5432/{os.environ['POSTGRES_DB']}"
+              query = "select to_regclass('public.customers'), to_regclass('public.checkpoint_migrations')"
+              for attempt in range(90):
+                  try:
+                      with psycopg.connect(uri, connect_timeout=3) as connection:
+                          if connection.execute(query).fetchone() == ('customers', 'checkpoint_migrations'):
+                              raise SystemExit(0)
+                  except psycopg.OperationalError:
+                      pass
+                  time.sleep(2)
+              raise SystemExit("Database setup did not complete within 180 seconds")
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 192Mi
+      containers:
+        - name: api
+          image: finance-ai-agent:v8
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c"]
+          args:
+            - |
+              export DATABASE_URL="postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+              export LANGGRAPH_POSTGRES_URI="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+              exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+          envFrom:
+            - configMapRef:
+                name: finance-ai-config
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: finance-ai-secrets
+                  key: POSTGRES_PASSWORD
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: finance-ai-secrets
+                  key: OPENAI_API_KEY
+          ports:
+            - name: http
+              containerPort: 8000
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 4
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 750m
+              memory: 768Mi

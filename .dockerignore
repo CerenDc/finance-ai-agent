@@ -8,7 +8,9 @@ htmlcov
 .env
 *.pyc
 .DS_Store
-tests
+tests/*
+!tests/docker
+!tests/docker/**
 pytest.ini
 requirements-dev.txt
 compose.yaml

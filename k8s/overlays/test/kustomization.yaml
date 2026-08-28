@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: finance-ai
+resources:
+  - ../../base
+patches:
+  - path: api-test-patch.yaml
+images:
+  - name: finance-ai-agent
+    newName: finance-ai-agent
+    newTag: v8-test
+secretGenerator:
+  - name: finance-ai-secrets
+    literals:
+      - POSTGRES_PASSWORD=synthetic-k8s-password
+      - OPENAI_API_KEY=synthetic-test-key-not-used
+generatorOptions:
+  disableNameSuffixHash: true

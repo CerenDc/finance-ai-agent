@@ -1,0 +1,14 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finance-ai-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          args:
+            - |
+              export DATABASE_URL="postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+              export LANGGRAPH_POSTGRES_URI="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+              exec uvicorn docker_test.app:app --host 0.0.0.0 --port 8000
