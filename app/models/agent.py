@@ -1,15 +1,19 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AgentChatRequest(BaseModel):
-    message: str = Field(min_length=1)
-    thread_id: str | None = Field(default=None, min_length=1)
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    message: str = Field(min_length=1, max_length=10_000)
+    thread_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class AgentResumeRequest(BaseModel):
-    thread_id: str = Field(min_length=1)
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    thread_id: str = Field(min_length=1, max_length=200)
     decision: Literal["approve", "reject"]
 
 

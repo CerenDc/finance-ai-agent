@@ -1,10 +1,18 @@
+import os
+
 import httpx
+from dotenv import load_dotenv
 
 from langchain_core.tools import tool
 from langgraph.types import interrupt
 
 
-BASE_URL = "http://127.0.0.1:8000"
+load_dotenv()
+
+BASE_URL = os.getenv(
+    "FINANCE_API_BASE_URL",
+    "http://127.0.0.1:8000",
+).rstrip("/")
 
 
 @tool

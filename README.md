@@ -1,4 +1,4 @@
-# Finance AI Agent — V7.1 PostgreSQL Checkpointing
+# Finance AI Agent — V7.3 Tests automatisés et robustesse
 
 ## Démarrage local
 
@@ -209,3 +209,37 @@ curl -X POST http://127.0.0.1:8000/agent/resume \
 
 Pour tester `reject`, utiliser un nouveau thread et envoyer `"decision":
 "reject"`. Toute autre décision est refusée avec HTTP 422.
+
+## V7.3 — Tests
+
+Installer les dépendances de développement :
+
+```bash
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+```
+
+Lancer la suite complète :
+
+```bash
+pytest -q
+```
+
+Lancer la suite avec couverture :
+
+```bash
+pytest --cov
+```
+
+Pour limiter le rapport au code applicatif et afficher les lignes manquantes :
+
+```bash
+pytest --cov=app --cov-report=term-missing
+```
+
+La suite couvre les routes FastAPI finance et agent, la validation Pydantic,
+les erreurs de dépendances, les tools HTTP et leurs timeouts, le routage
+LangGraph, la propagation du `thread_id`, ainsi que les parcours sensibles
+`approve` et `reject`. Tous les appels LLM, HTTP et actions sensibles sont
+mockés dans les tests unitaires : aucun email, envoi réel, accès Internet ou
+service PostgreSQL externe n'est requis par `pytest`.
