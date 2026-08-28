@@ -1,5 +1,8 @@
+import argparse
 import asyncio
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
@@ -7,7 +10,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import MessagesState, START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.types import Command
@@ -36,6 +39,16 @@ LOCAL_TOOL_NAMES = {
     "create_payment_reminder",
     "send_payment_reminder",
 }
+
+
+def get_langgraph_postgres_uri() -> str:
+    uri = os.getenv("LANGGRAPH_POSTGRES_URI")
+    if not uri:
+        raise RuntimeError(
+            "LANGGRAPH_POSTGRES_URI is not configured. "
+            "Add it to .env before starting the Finance agent."
+        )
+    return uri
 
 
 SYSTEM_PROMPT = """
@@ -94,7 +107,7 @@ def create_mcp_client() -> MultiServerMCPClient:
     )
 
 
-async def create_finance_graph():
+async def compile_finance_graph(checkpointer: AsyncPostgresSaver):
     """Discover MCP tools, validate the hybrid registry, and compile the graph."""
     mcp_client = create_mcp_client()
     mcp_read_tools = await mcp_client.get_tools()
@@ -140,7 +153,6 @@ async def create_finance_graph():
     builder.add_conditional_edges("agent", tools_condition)
     builder.add_edge("tools", "agent")
 
-    checkpointer = InMemorySaver()
     graph = builder.compile(checkpointer=checkpointer)
 
     print(f"🔌 MCP read tools chargés : {', '.join(sorted(loaded_mcp_names))}")
@@ -148,6 +160,22 @@ async def create_finance_graph():
     print("✅ Aucun doublon dans le registry hybride")
 
     return graph
+
+
+@asynccontextmanager
+async def create_finance_graph() -> AsyncIterator:
+    """Keep the async PostgreSQL checkpointer open for the graph lifetime."""
+    uri = get_langgraph_postgres_uri()
+    async with AsyncPostgresSaver.from_conn_string(uri) as checkpointer:
+        yield await compile_finance_graph(checkpointer)
+
+
+async def setup_langgraph_checkpointer() -> None:
+    """Create or migrate LangGraph checkpoint tables once during setup."""
+    uri = get_langgraph_postgres_uri()
+    async with AsyncPostgresSaver.from_conn_string(uri) as checkpointer:
+        await checkpointer.setup()
+    print("✅ Tables LangGraph PostgreSQL initialisées")
 
 
 async def ask_agent(graph, question: str, config: dict | None = None):
@@ -179,40 +207,82 @@ def print_agent_path(result: dict) -> None:
             print(f"📍 Source : {source}")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Finance LangGraph agent")
+    parser.add_argument(
+        "--thread-id",
+        default="finance-demo-1",
+        help="Persistent LangGraph conversation thread identifier.",
+    )
+    parser.add_argument(
+        "--resume",
+        choices=("approve", "reject"),
+        help="Resume a persisted Human Approval interrupt.",
+    )
+    parser.add_argument(
+        "--interrupt-only",
+        action="store_true",
+        help="Stop the process after persisting an interrupt.",
+    )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Create or migrate LangGraph checkpoint tables, then exit.",
+    )
+    return parser.parse_args()
+
+
 async def main() -> None:
-    graph = await create_finance_graph()
+    args = parse_args()
+    if args.setup:
+        await setup_langgraph_checkpointer()
+        return
+
     config = {
         "configurable": {
-            "thread_id": "finance-demo-1"
+            "thread_id": args.thread_id
         }
     }
 
-    question = input("\n💬 Pose une question financière : ")
-    result = await ask_agent(graph, question, config=config)
+    async with create_finance_graph() as graph:
+        print(f"🧵 thread_id : {args.thread_id}")
 
-    if "__interrupt__" in result:
-        interruption = result["__interrupt__"][0]
-        approval_request = interruption.value
+        if args.resume:
+            result = await graph.ainvoke(
+                Command(resume=args.resume),
+                config=config,
+            )
+        else:
+            question = input("\n💬 Pose une question financière : ")
+            result = await ask_agent(graph, question, config=config)
 
-        print("\n⛔ APPROBATION HUMAINE REQUISE")
-        print(f"Message       : {approval_request['message']}")
-        print(f"Facture       : {approval_request['invoice_id']}")
-        print(f"Destinataire  : {approval_request['destinataire']}")
-        print(f"Sujet         : {approval_request['subject']}")
-        print(f"Corps         : {approval_request['body']}")
+        if "__interrupt__" in result:
+            interruption = result["__interrupt__"][0]
+            approval_request = interruption.value
 
-        decision = ""
-        while decision not in {"approve", "reject"}:
-            decision = input("\nDécision (approve/reject) : ").strip().lower()
+            print("\n⛔ APPROBATION HUMAINE REQUISE")
+            print(f"Message       : {approval_request['message']}")
+            print(f"Facture       : {approval_request['invoice_id']}")
+            print(f"Destinataire  : {approval_request['destinataire']}")
+            print(f"Sujet         : {approval_request['subject']}")
+            print(f"Corps         : {approval_request['body']}")
 
-        result = await graph.ainvoke(
-            Command(resume=decision),
-            config=config,
-        )
+            if args.interrupt_only:
+                print("\n💾 Interrupt persisté. Vous pouvez arrêter ce processus.")
+                return
 
-    print_agent_path(result)
-    print("\n🤖 RÉPONSE FINALE :")
-    print(result["messages"][-1].content)
+            decision = ""
+            while decision not in {"approve", "reject"}:
+                decision = input("\nDécision (approve/reject) : ").strip().lower()
+
+            result = await graph.ainvoke(
+                Command(resume=decision),
+                config=config,
+            )
+
+        print_agent_path(result)
+        print("\n🤖 RÉPONSE FINALE :")
+        print(result["messages"][-1].content)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# Finance AI Agent — V6 MCP
+# Finance AI Agent — V7.1 PostgreSQL Checkpointing
 
 ## Démarrage local
 
@@ -27,6 +27,7 @@ la variable suivante :
 
 ```dotenv
 DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/finance
+LANGGRAPH_POSTGRES_URI=postgresql://postgres:postgres@localhost:5432/finance
 FINANCE_API_BASE_URL=http://127.0.0.1:8000
 ```
 
@@ -43,6 +44,7 @@ idempotent et peut être relancé :
 ```bash
 source .venv/bin/activate
 python -m app.db.seed
+python -m app.agent.finance_graph --setup
 ```
 
 Démarrer l'API :
@@ -56,7 +58,7 @@ Dans un second terminal, tester l'agent et la V4 Human Approval :
 
 ```bash
 source .venv/bin/activate
-python -m app.agent.finance_graph
+python -m app.agent.finance_graph --thread-id finance-demo-1
 ```
 
 Exemple de demande :
@@ -127,6 +129,35 @@ Le parcours terminal indique `Source : MCP Finance (stdio)` pour les six
 lectures et `Source : LOCAL` pour `create_payment_reminder` et
 `send_payment_reminder`. L'approbation humaine reste gérée par `interrupt()`
 dans le tool local d'envoi.
+
+## Checkpoints LangGraph persistants
+
+Le graphe async utilise `AsyncPostgresSaver`. La commande `--setup` ci-dessus
+crée ou met à niveau les tables de checkpoint une seule fois au moment de
+l'installation ; elle ne doit pas être exécutée pour chaque requête.
+
+Pour persister une interruption et quitter avant toute décision :
+
+```bash
+python -m app.agent.finance_graph \
+  --thread-id test-persistent-001 \
+  --interrupt-only
+```
+
+Saisir `Envoie une relance de paiement pour la facture INV-001`. Après
+l'affichage de l'interruption, le processus se termine sans appeler `/send`.
+Reprendre ensuite exactement ce checkpoint dans un nouveau processus :
+
+```bash
+python -m app.agent.finance_graph \
+  --thread-id test-persistent-001 \
+  --resume approve
+```
+
+Pour tester l'annulation, recommencer avec un nouvel identifiant, par exemple
+`test-persistent-reject-001`, puis reprendre avec `--resume reject`. Une
+conversation persistante se teste de la même façon en réutilisant
+`--thread-id conversation-001` lors de chaque lancement.
 
 Pour arrêter PostgreSQL sans supprimer les données :
 
