@@ -307,3 +307,33 @@ docker compose down
 Cette commande conserve le volume `finance_postgres_data`. Pour suivre les
 logs d'un service particulier, utiliser `docker compose logs -f api` ou
 `docker compose logs -f postgres`.
+
+### Validation Docker sans appel OpenAI
+
+Les données TechNova sont des fixtures synthétiques définies dans
+`app/db/seed.py`. Pour tester le parcours HTTP complet sans transmettre ces
+données à OpenAI, superposer le fichier Compose de test :
+
+```bash
+docker compose -f compose.yaml -f compose.test.yaml up -d --build
+```
+
+Cette configuration monte uniquement `tests/docker` et remplace le modèle par
+un fake déterministe. Le reste du parcours reste réel : `/agent/chat` →
+LangGraph → tool MCP `get_customer_balance` → serveur MCP stdio → FastAPI →
+PostgreSQL. Elle ne modifie ni le code ni la configuration de production.
+
+```bash
+curl -X POST http://localhost:8000/agent/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "thread_id": "docker-synthetic-test",
+    "message": "Combien TechNova nous doit-il ?"
+  }'
+```
+
+Arrêter cette stack avec les mêmes fichiers Compose :
+
+```bash
+docker compose -f compose.yaml -f compose.test.yaml down
+```

@@ -1,0 +1,13 @@
+services:
+  api:
+    environment:
+      OPENAI_API_KEY: synthetic-test-key-not-used
+    volumes:
+      - ./tests/docker:/app/docker_test:ro
+    command:
+      - sh
+      - -c
+      - >-
+        python -m app.db.seed &&
+        python -m app.agent.finance_graph --setup &&
+        exec uvicorn docker_test.app:app --host 0.0.0.0 --port 8000
