@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+__pycache__
+.pytest_cache
+.coverage
+htmlcov
+.env
+*.pyc
+.DS_Store
+tests
+pytest.ini
+requirements-dev.txt
+compose.yaml
+README.md

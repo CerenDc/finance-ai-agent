@@ -243,3 +243,67 @@ LangGraph, la propagation du `thread_id`, ainsi que les parcours sensibles
 `approve` et `reject`. Tous les appels LLM, HTTP et actions sensibles sont
 mockés dans les tests unitaires : aucun email, envoi réel, accès Internet ou
 service PostgreSQL externe n'est requis par `pytest`.
+
+## V7.4 — Docker Compose
+
+La stack contient deux services : `api` exécute FastAPI, LangGraph et le serveur
+Finance MCP 2.1.1 en subprocess stdio ; `postgres` stocke les données finance et
+les checkpoints LangGraph. Dans Compose, tous les appels internes utilisent les
+noms de services Docker (`api` et `postgres`).
+
+Copier `.env.example` vers `.env`, choisir `POSTGRES_PASSWORD` et renseigner
+`OPENAI_API_KEY`. Les mots de passe utilisés dans les URI PostgreSQL doivent
+être compatibles avec une URI, ou être encodés avant utilisation.
+
+### Construction
+
+```bash
+docker compose build
+```
+
+### Démarrage
+
+```bash
+docker compose up -d
+```
+
+Le conteneur `api` attend que PostgreSQL soit sain, initialise les tables et le
+seed de démonstration de manière idempotente, applique le setup du checkpointer,
+puis lance Uvicorn sur `0.0.0.0:8000` sans mode reload.
+
+### État
+
+```bash
+docker compose ps
+```
+
+### Logs
+
+```bash
+docker compose logs -f
+```
+
+### Tests API
+
+```bash
+curl http://localhost:8000/health
+```
+
+```bash
+curl -X POST http://localhost:8000/agent/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "thread_id": "docker-final-test",
+    "message": "Combien TechNova nous doit-il ?"
+  }'
+```
+
+### Arrêt
+
+```bash
+docker compose down
+```
+
+Cette commande conserve le volume `finance_postgres_data`. Pour suivre les
+logs d'un service particulier, utiliser `docker compose logs -f api` ou
+`docker compose logs -f postgres`.
