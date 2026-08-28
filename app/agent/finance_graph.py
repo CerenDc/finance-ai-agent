@@ -14,6 +14,8 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import MessagesState, START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.types import Command
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
 from app.tools.finance_tools import (
     create_payment_reminder,
@@ -164,9 +166,21 @@ async def compile_finance_graph(checkpointer: AsyncPostgresSaver):
 
 @asynccontextmanager
 async def create_finance_graph() -> AsyncIterator:
-    """Keep the async PostgreSQL checkpointer open for the graph lifetime."""
+    """Keep a reconnecting PostgreSQL checkpointer pool open for the graph lifetime."""
     uri = get_langgraph_postgres_uri()
-    async with AsyncPostgresSaver.from_conn_string(uri) as checkpointer:
+    async with AsyncConnectionPool(
+        conninfo=uri,
+        min_size=1,
+        max_size=10,
+        open=False,
+        check=AsyncConnectionPool.check_connection,
+        kwargs={
+            "autocommit": True,
+            "prepare_threshold": 0,
+            "row_factory": dict_row,
+        },
+    ) as pool:
+        checkpointer = AsyncPostgresSaver(pool)
         yield await compile_finance_graph(checkpointer)
 
 

@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: finance-ai
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - postgres-pvc.yaml
+  - postgres-deployment.yaml
+  - postgres-service.yaml
+  - database-setup-job.yaml
+  - api-deployment.yaml
+  - api-service.yaml

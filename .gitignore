@@ -6,3 +6,4 @@ __pycache__/
 .coverage
 htmlcov/
 .DS_Store
+k8s/secret.local.yaml

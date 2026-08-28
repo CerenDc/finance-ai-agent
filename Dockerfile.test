@@ -1,0 +1,4 @@
+FROM finance-ai-agent:v8
+
+COPY --chown=appuser:appuser tests/docker /app/docker_test
+

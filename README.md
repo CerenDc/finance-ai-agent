@@ -1,4 +1,4 @@
-# Finance AI Agent — V7.3 Tests automatisés et robustesse
+# Finance AI Agent
 
 ## Démarrage local
 
@@ -337,3 +337,131 @@ Arrêter cette stack avec les mêmes fichiers Compose :
 ```bash
 docker compose -f compose.yaml -f compose.test.yaml down
 ```
+
+## V8 — Kubernetes local avec kind
+
+La stack Kubernetes conserve l'architecture Docker validée en V7.4 : un
+Deployment `finance-ai-api` exécute FastAPI, LangGraph et le subprocess MCP en
+`stdio`, tandis qu'un Deployment `postgres` exécute PostgreSQL 17. Aucun
+Deployment MCP séparé n'est créé. Un Job idempotent initialise le seed et les
+tables LangGraph avant le démarrage des deux replicas API.
+
+### Prérequis et cluster
+
+Les commandes ci-dessous utilisent Docker Desktop, `kubectl`, Kustomize intégré
+à `kubectl` et kind :
+
+```bash
+brew install kind kubectl
+kind create cluster --name finance-ai
+kubectl config use-context kind-finance-ai
+kubectl get nodes
+kubectl get storageclass
+```
+
+Le StorageClass `standard` de kind assure le provisioning dynamique du PVC ;
+aucun PersistentVolume statique n'est nécessaire.
+
+### Images locales
+
+Construire l'image de production puis la charger directement dans kind, sans
+registry externe :
+
+```bash
+docker build -t finance-ai-agent:v8 .
+kind load docker-image finance-ai-agent:v8 --name finance-ai
+```
+
+L'overlay synthétique utilise une image dérivée qui ajoute uniquement le fake
+LLM déjà employé par les tests Docker V7.4 :
+
+```bash
+docker build -f Dockerfile.test -t finance-ai-agent:v8-test .
+kind load docker-image finance-ai-agent:v8-test --name finance-ai
+```
+
+### Secret local et déploiement de production
+
+`k8s/secret.example.yaml` ne contient que des placeholders. Ne pas l'appliquer
+tel quel et ne jamais committer un `k8s/secret.local.yaml`. Créer le Secret
+directement dans le cluster, en choisissant un mot de passe compatible URI :
+
+```bash
+kubectl apply -f k8s/base/namespace.yaml
+kubectl create secret generic finance-ai-secrets \
+  --namespace finance-ai \
+  --from-literal=POSTGRES_PASSWORD='replace-locally' \
+  --from-literal=OPENAI_API_KEY='replace-locally'
+kubectl apply -k k8s/
+```
+
+### Déploiement de test sans OpenAI
+
+L'overlay génère uniquement des valeurs synthétiques et remplace le modèle par
+`SyntheticFinanceLLM`. Aucun contenu TechNova n'est envoyé à OpenAI :
+
+```bash
+kubectl apply -k k8s/overlays/test/
+kubectl wait --for=condition=complete \
+  job/finance-ai-database-setup -n finance-ai --timeout=180s
+kubectl rollout status deployment/postgres -n finance-ai --timeout=180s
+kubectl rollout status deployment/finance-ai-api -n finance-ai --timeout=240s
+```
+
+### Inspection, logs et exposition locale
+
+```bash
+kubectl get all -n finance-ai
+kubectl get pvc -n finance-ai
+kubectl get endpointslices -n finance-ai \
+  -l kubernetes.io/service-name=finance-ai-api
+kubectl logs -n finance-ai -l app.kubernetes.io/component=api \
+  --all-containers=true --prefix=true
+kubectl logs -n finance-ai -l app.kubernetes.io/component=postgres
+kubectl port-forward service/finance-ai-api 8000:8000 -n finance-ai
+```
+
+Dans un autre terminal :
+
+```bash
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "thread_id": "k8s-synthetic-test",
+    "message": "Combien TechNova nous doit-il ?"
+  }'
+```
+
+### Scaling et résilience
+
+```bash
+kubectl scale deployment/finance-ai-api --replicas=3 -n finance-ai
+kubectl scale deployment/finance-ai-api --replicas=2 -n finance-ai
+kubectl get pods -n finance-ai -l app.kubernetes.io/component=api
+kubectl delete pod <nom-pod-api> -n finance-ai
+kubectl rollout status deployment/finance-ai-api -n finance-ai --timeout=240s
+```
+
+Pour vérifier la persistance, supprimer seulement le Pod PostgreSQL puis
+relancer le scénario TechNova. Ne pas supprimer le PVC :
+
+```bash
+kubectl delete pod <nom-pod-postgres> -n finance-ai
+kubectl rollout status deployment/postgres -n finance-ai --timeout=240s
+kubectl get pvc postgres-data -n finance-ai
+```
+
+### Nettoyage
+
+Supprimer les workloads de test tout en conservant le cluster :
+
+```bash
+kubectl delete -k k8s/overlays/test/
+```
+
+Cette commande supprime également le PVC déclaré par l'overlay et donc rend les
+données inaccessibles. Pour conserver explicitement les données lors d'un
+nettoyage manuel, supprimer uniquement les Deployments, Services et le Job, et
+laisser `persistentvolumeclaim/postgres-data` intact. Supprimer le cluster kind
+avec `kind delete cluster --name finance-ai` détruit également son stockage.
