@@ -164,3 +164,48 @@ Pour arrêter PostgreSQL sans supprimer les données :
 ```bash
 docker compose stop postgres
 ```
+
+## API HTTP de l'agent
+
+FastAPI crée une seule instance du graphe hybride au démarrage et la conserve
+dans son lifespan. Le même `AsyncPostgresSaver` reste ouvert jusqu'au shutdown ;
+les handlers `/agent/chat` et `/agent/resume` réutilisent donc le même graphe et
+ne créent aucun checkpointer par requête.
+
+Lecture avec un `thread_id` explicite :
+
+```bash
+curl -X POST http://127.0.0.1:8000/agent/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "thread_id": "api-test-001",
+    "message": "Combien TechNova nous doit-il ?"
+  }'
+```
+
+Si `thread_id` est omis, l'API en génère un et le renvoie. Pour déclencher une
+approbation persistante :
+
+```bash
+curl -X POST http://127.0.0.1:8000/agent/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "thread_id": "api-sensitive-001",
+    "message": "Envoie une relance de paiement pour la facture INV-001"
+  }'
+```
+
+Après une réponse `approval_required`, reprendre avec exactement le même
+`thread_id`, y compris après un redémarrage complet d'Uvicorn :
+
+```bash
+curl -X POST http://127.0.0.1:8000/agent/resume \
+  -H "Content-Type: application/json" \
+  -d '{
+    "thread_id": "api-sensitive-001",
+    "decision": "approve"
+  }'
+```
+
+Pour tester `reject`, utiliser un nouveau thread et envoyer `"decision":
+"reject"`. Toute autre décision est refusée avec HTTP 422.

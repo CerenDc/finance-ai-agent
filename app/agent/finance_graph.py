@@ -192,6 +192,37 @@ async def ask_agent(graph, question: str, config: dict | None = None):
     )
 
 
+async def resume_agent(graph, decision: str, config: dict):
+    """Resume a persisted graph interrupt with the supplied thread config."""
+    return await graph.ainvoke(
+        Command(resume=decision),
+        config=config,
+    )
+
+
+def thread_config(thread_id: str) -> dict:
+    """Build the persistent LangGraph configuration shared by CLI and API."""
+    return {"configurable": {"thread_id": thread_id}}
+
+
+def result_interrupt(result: dict) -> dict | None:
+    """Return the JSON-compatible interrupt payload, when present."""
+    interruptions = result.get("__interrupt__", [])
+    if not interruptions:
+        return None
+    value = interruptions[0].value
+    return value if isinstance(value, dict) else {"message": str(value)}
+
+
+def result_answer(result: dict) -> str:
+    """Extract a JSON-safe textual answer from a completed graph result."""
+    messages = result.get("messages", [])
+    if not messages:
+        return ""
+    content = messages[-1].content
+    return content if isinstance(content, str) else str(content)
+
+
 def print_agent_path(result: dict) -> None:
     print("\n--- PARCOURS DE L'AGENT ---")
 
@@ -238,27 +269,19 @@ async def main() -> None:
         await setup_langgraph_checkpointer()
         return
 
-    config = {
-        "configurable": {
-            "thread_id": args.thread_id
-        }
-    }
+    config = thread_config(args.thread_id)
 
     async with create_finance_graph() as graph:
         print(f"🧵 thread_id : {args.thread_id}")
 
         if args.resume:
-            result = await graph.ainvoke(
-                Command(resume=args.resume),
-                config=config,
-            )
+            result = await resume_agent(graph, args.resume, config)
         else:
             question = input("\n💬 Pose une question financière : ")
             result = await ask_agent(graph, question, config=config)
 
         if "__interrupt__" in result:
-            interruption = result["__interrupt__"][0]
-            approval_request = interruption.value
+            approval_request = result_interrupt(result)
 
             print("\n⛔ APPROBATION HUMAINE REQUISE")
             print(f"Message       : {approval_request['message']}")
@@ -275,10 +298,7 @@ async def main() -> None:
             while decision not in {"approve", "reject"}:
                 decision = input("\nDécision (approve/reject) : ").strip().lower()
 
-            result = await graph.ainvoke(
-                Command(resume=decision),
-                config=config,
-            )
+            result = await resume_agent(graph, decision, config)
 
         print_agent_path(result)
         print("\n🤖 RÉPONSE FINALE :")
