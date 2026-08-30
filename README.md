@@ -71,6 +71,10 @@ flowchart LR
 
 ## Example use cases
 
+The demo intentionally uses French business queries to illustrate how the agent
+can operate in a French-speaking finance environment. The underlying architecture,
+tools and APIs are language-agnostic.
+
 All names, invoices and amounts below are synthetic demonstration data. **TechNova is not a real customer.**
 
 ```text
@@ -87,6 +91,15 @@ Agent → draft → approval_required → human decision → send or cancel
 ```
 
 The reminder endpoint simulates the external send, but the approval boundary is real: execution is unreachable until the persisted LangGraph interrupt is explicitly approved.
+
+### English query example
+
+The conversational layer can also handle equivalent English requests.
+
+```text
+User:     How much does TechNova owe us?
+Expected: TechNova owes us €5,800 across 2 unpaid invoices.
+```
 
 ## Tech stack
 
